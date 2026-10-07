@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0 — 2026-10-07
+
+### Fixed
+- **Skills actually leave context on pi >= 1.0** — pi 1.0 builds the system
+  prompt from structured sections and keeps recording them in the transcript.
+  The old approach (returning a full `systemPrompt` string) only projects a
+  forced prompt onto the request, so the transcript — and therefore /context,
+  the footer token estimate, and compaction — still counted every skill
+  description. The `before_agent_start` hook now filters
+  `event.systemPromptOptions.skills` instead, so pi rebuilds the `<skills>`
+  section and records a proper transcript delta. Explicit `/skill:name`
+  invocation still works for gated skills. Older pi falls back to the previous
+  string-surgery behavior.
+- 3 new tests for the structured gating path
+
 ## 0.9.0 — 2026-06-28
 
 ### Added

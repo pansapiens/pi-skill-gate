@@ -872,3 +872,75 @@ describe("analytics cache", () => {
     expect(fs.readFileSync).toHaveBeenCalledTimes(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════
+//  before_agent_start system prompt gating (pi >= 1.0)
+// ═════════════════════════════════════════════════════════
+
+describe("before_agent_start gating via systemPromptOptions", () => {
+  /** Install the extension against a mock pi API and grab the hook. */
+  async function getHandler() {
+    const mod = await import("./index.js");
+    const handlers = new Map<string, (event: any, ctx: any) => Promise<any>>();
+    mod.default({
+      on: (event: string, handler: any) => handlers.set(event, handler),
+      registerCommand: vi.fn(),
+    } as any);
+    const handler = handlers.get("before_agent_start");
+    if (!handler) throw new Error("before_agent_start handler not registered");
+    return handler;
+  }
+
+  function makeEvent(skills: Array<{ name: string }>) {
+    return {
+      type: "before_agent_start",
+      prompt: "hi",
+      systemPrompt: "<skills>rendered</skills>",
+      systemPromptOptions: { skills },
+    };
+  }
+
+  it("drops disabled skills (default state) from the structured options", async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false); // empty config → all disabled
+    const handler = await getHandler();
+    const event = makeEvent([
+      { name: "alpha" },
+      { name: "beta" },
+    ] as any);
+    const result = await handler(event, { cwd: "/home/test-user" });
+    // No forced prompt: pi must record the section delta itself.
+    expect(result).toBeUndefined();
+    expect(event.systemPromptOptions.skills).toEqual([]);
+  });
+
+  it("keeps globally enabled skills", async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify({ skills: { alpha: "enabled" }, projects: {} }) as any
+    );
+    const handler = await getHandler();
+    const event = makeEvent([
+      { name: "alpha" },
+      { name: "beta" },
+    ] as any);
+    await handler(event, { cwd: "/home/test-user" });
+    expect(event.systemPromptOptions.skills.map((s: any) => s.name)).toEqual(["alpha"]);
+  });
+
+  it("honours project overrides when cwd is a project", async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify({
+        skills: {},
+        projects: { "/home/test-user/proj": { skills: { beta: "enabled" } } },
+      }) as any
+    );
+    const handler = await getHandler();
+    const event = makeEvent([
+      { name: "alpha" },
+      { name: "beta" },
+    ] as any);
+    await handler(event, { cwd: "/home/test-user/proj" });
+    expect(event.systemPromptOptions.skills.map((s: any) => s.name)).toEqual(["beta"]);
+  });
+});

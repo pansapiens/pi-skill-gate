@@ -312,17 +312,38 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── System prompt hook ──
+  // pi >= 1.0 builds the system prompt from structured sections. Filtering
+  // `event.systemPromptOptions.skills` lets pi rebuild the <skills> section and
+  // record the change as a transcript delta, so context accounting (/context,
+  // footer, compaction) matches what the model actually receives.
+  //
+  // Returning a full `systemPrompt` string (the pre-1.0 approach used here
+  // before) only projects a forced prompt onto the request; the transcript
+  // keeps recording the unmodified structured sections, so every skill
+  // description stayed visible in context accounting.
   pi.on("before_agent_start", async (event, ctx) => {
     const config = loadConfig();
     const projectPath = ctx.cwd !== homedir() ? ctx.cwd : undefined;
+    const isEnabled = (name: string) => loadEffectiveState(name, config, projectPath).state === "enabled";
+
+    if (Array.isArray(event.systemPromptOptions?.skills)) {
+      // Authoritative skill list from pi's own resource loader. Dropping the
+      // disabled ones here removes them from the rendered prompt AND the
+      // transcript; explicitly invoking a gated skill via /skill:name still
+      // works (pi expands those from its resource loader, not this list).
+      event.systemPromptOptions.skills = event.systemPromptOptions.skills.filter((s) => isEnabled(s.name));
+      return;
+    }
+
+    // Fallback for older pi without structured systemPromptOptions:
+    // strip the rendered <available_skills> block, re-add enabled skills.
     const rows: SkillVisibility[] = cachedSkills.map((s) => {
-      const { state } = loadEffectiveState(s.name, config, projectPath);
       return {
         name: s.name,
         description: s.description,
         filePath: s.filePath,
         disableModelInvocation: s.disableModelInvocation,
-        state,
+        state: isEnabled(s.name) ? "enabled" : "disabled",
       };
     });
     let prompt = event.systemPrompt.replace(/\n<available_skills>[\s\S]*?<\/available_skills>\n/g, "\n");
